@@ -59,7 +59,9 @@ export default function App(){
   const[panSt,setPanSt]=useState(null);
   const[panOff,setPanOff]=useState({x:0,y:0});
   const cvRef=useRef(null);
+  const magRef=useRef(null);
   const boxRef=useRef(null);
+  const[magPos,setMagPos]=useState(null);
   const tmr=useRef(null);
   const dp=useRef({});
   const longPressRef=useRef(null);
@@ -176,9 +178,10 @@ export default function App(){
       const t=e.touches[0];const mx=t.clientX-rect.left,my=t.clientY-rect.top;
       // Check handle first
       const h=findHandle(mx,my);
-      if(h){e.preventDefault();setDragSt(h);touchStartRef.current=null;return;}
+      if(h){e.preventDefault();setDragSt(h);setMagPos({x:mx,y:my});touchStartRef.current=null;return;}
       // Start long press timer
       touchStartRef.current={x:t.clientX,y:t.clientY,mx,my,moved:false,startPan:{...panOff}};
+      setMagPos({x:mx,y:my});
       longPressRef.current=setTimeout(()=>{
         if(touchStartRef.current&&!touchStartRef.current.moved){
           placeAction(touchStartRef.current.mx,touchStartRef.current.my);
@@ -201,7 +204,9 @@ export default function App(){
     if(dragSt&&e.touches.length===1){
       e.preventDefault();
       const t=e.touches[0];const rect=cvRef.current.getBoundingClientRect();
-      applyDrag(t.clientX-rect.left,t.clientY-rect.top,dragSt);return;
+      const mx=t.clientX-rect.left,my=t.clientY-rect.top;
+      setMagPos({x:mx,y:my});
+      applyDrag(mx,my,dragSt);return;
     }
     if(e.touches.length===1&&touchStartRef.current){
       const t=e.touches[0];
@@ -209,7 +214,8 @@ export default function App(){
       if(Math.hypot(dx,dy)>10){
         touchStartRef.current.moved=true;
         if(longPressRef.current){clearTimeout(longPressRef.current);longPressRef.current=null;}
-        // 1-finger pan
+        // 1-finger pan: hide magnifier
+        setMagPos(null);
         e.preventDefault();
         const sp=touchStartRef.current.startPan;
         setPanOff({x:sp.x-dx/(dp.current.bW||10),y:sp.y+dy});
@@ -225,6 +231,7 @@ export default function App(){
   },[dragSt,applyDrag]);
 
   const onTouchEnd=useCallback(e=>{
+    setMagPos(null);
     if(dragSt){setDragSt(null);return;}
     if(longPressRef.current){clearTimeout(longPressRef.current);longPressRef.current=null;}
     // Tap detection (for line deletion)
@@ -372,6 +379,34 @@ export default function App(){
     ctx.fillStyle=T.text;ctx.font="10px monospace";ctx.textAlign="right";ctx.fillText(`${idx+1}/${d1m.length} (${pct}%)  Bar ${bIn}/15`,W-pad.r,H-3);ctx.textAlign="left";ctx.fillText(new Date(d1m[idx].time).toLocaleString("ja-JP"),pad.l,H-3);
   },[d1m,idx,dim,vis,yZoom,showBB,showSAR,showAutoTL,mLines,vLines,pendingPt,panOff]);
 
+  // ─── MAGNIFIER DRAW ───
+  useEffect(()=>{
+    const mag=magRef.current;const src=cvRef.current;
+    if(!mag||!src)return;
+    if(!magPos){const c=mag.getContext("2d");c.clearRect(0,0,mag.width,mag.height);return;}
+    const dpr=window.devicePixelRatio||1;
+    const MAG=3,SIZE=110;
+    mag.width=SIZE*dpr;mag.height=SIZE*dpr;
+    const c=mag.getContext("2d");c.scale(dpr,dpr);
+    // clip to circle
+    c.save();c.beginPath();c.arc(SIZE/2,SIZE/2,SIZE/2-1,0,Math.PI*2);c.clip();
+    // source region in CSS pixels on main canvas, zoom MAG×
+    const srcW=SIZE/MAG,srcH=SIZE/MAG;
+    const sx=(magPos.x-srcW/2)*dpr,sy=(magPos.y-srcH/2)*dpr;
+    c.drawImage(src,sx,sy,srcW*dpr,srcH*dpr,0,0,SIZE,SIZE);
+    // crosshair
+    c.strokeStyle="rgba(255,255,255,0.9)";c.lineWidth=1;
+    c.beginPath();c.moveTo(SIZE/2,SIZE/2-10);c.lineTo(SIZE/2,SIZE/2+10);
+    c.moveTo(SIZE/2-10,SIZE/2);c.lineTo(SIZE/2+10,SIZE/2);c.stroke();
+    // dot at center
+    c.beginPath();c.arc(SIZE/2,SIZE/2,2,0,Math.PI*2);
+    c.fillStyle="rgba(255,255,255,0.9)";c.fill();
+    c.restore();
+    // border ring
+    c.beginPath();c.arc(SIZE/2,SIZE/2,SIZE/2-1,0,Math.PI*2);
+    c.strokeStyle="rgba(255,255,255,0.3)";c.lineWidth=1.5;c.stroke();
+  },[magPos,d1m,idx,dim,vis,yZoom,showBB,showSAR,showAutoTL,mLines,vLines,pendingPt,panOff]);
+
   useEffect(()=>{if(dragSt||panSt){const mm=e=>onMouseMove(e),mu=()=>onMouseUp();window.addEventListener("mousemove",mm);window.addEventListener("mouseup",mu);return()=>{window.removeEventListener("mousemove",mm);window.removeEventListener("mouseup",mu);};};},[dragSt,panSt,onMouseMove,onMouseUp]);
   useEffect(()=>{const h=e=>{if(e.code==="Space"){e.preventDefault();setPlay(p=>!p);}if(e.code==="ArrowRight"){e.preventDefault();setIdx(i=>Math.min(i+1,(d1m?.length||1)-1));}if(e.code==="ArrowLeft"){e.preventDefault();setIdx(i=>Math.max(i-1,0));}if(e.code==="ArrowUp"){e.preventDefault();setSpd(s=>Math.max(5,s-10));}if(e.code==="ArrowDown"){e.preventDefault();setSpd(s=>Math.min(500,s+10));}if(e.code==="Escape"){setPendingPt(null);setCtxMenu(null);}};window.addEventListener("keydown",h);return()=>window.removeEventListener("keydown",h);},[d1m]);
 
@@ -410,6 +445,9 @@ export default function App(){
           onAuxClick={e=>{if(e.button===1)e.preventDefault();}}
           onTouchStart={onTouchStart} onTouchMove={onTouchMove} onTouchEnd={onTouchEnd}
           style={{width:dim.w,height:dim.h,display:"block",touchAction:"none",cursor:dragSt?"grabbing":panSt?"move":"default"}}/>
+        {magPos&&(
+          <canvas ref={magRef} style={{position:"absolute",top:8,left:8,width:110,height:110,borderRadius:"50%",pointerEvents:"none",boxShadow:"0 2px 12px rgba(0,0,0,0.7)"}}/>
+        )}
         {ctxMenu&&(<div style={{position:"absolute",left:Math.min(ctxMenu.x,dim.w-140),top:ctxMenu.y-4,background:T.menu,border:`1px solid ${T.menuBorder}`,borderRadius:6,padding:2,zIndex:10,boxShadow:"0 4px 16px rgba(0,0,0,0.5)"}}>
           <div onClick={onMenuDel} style={{padding:"8px 18px",cursor:"pointer",fontSize:12,color:T.red,fontFamily:"inherit",borderRadius:4,fontWeight:600}}
             onMouseEnter={e=>e.target.style.background="rgba(239,51,64,0.12)"} onMouseLeave={e=>e.target.style.background="transparent"}>
