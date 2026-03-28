@@ -342,7 +342,12 @@ export default function App(){
     ctx.fillStyle="rgba(239,51,64,0.02)";ctx.fillRect(pad.l,rY(50),fullW,rY(0)-rY(50));
     ctx.strokeStyle=T.grid;ctx.lineWidth=0.5;ctx.font="10px monospace";ctx.fillStyle=T.text;ctx.textAlign="right";
     for(const v of[30,50,70]){const y=rY(v);ctx.beginPath();ctx.moveTo(pad.l,y);ctx.lineTo(pad.l+fullW,y);ctx.stroke();ctx.fillText(String(v),pad.l-4,y+3);}
-    ctx.strokeStyle="rgba(255,255,255,0.1)";ctx.lineWidth=1;ctx.setLineDash([5,5]);ctx.beginPath();ctx.moveTo(pad.l,rY(50));ctx.lineTo(pad.l+fullW,rY(50));ctx.stroke();ctx.setLineDash([]);
+    ctx.setLineDash([5,5]);ctx.lineWidth=1;
+    ctx.strokeStyle="rgba(255,255,255,0.3)";
+    for(const v of[5,10,15,20,30,70,80,85,90,95]){ctx.beginPath();ctx.moveTo(pad.l,rY(v));ctx.lineTo(pad.l+fullW,rY(v));ctx.stroke();}
+    ctx.strokeStyle="rgba(255,255,255,0.5)";
+    ctx.beginPath();ctx.moveTo(pad.l,rY(50));ctx.lineTo(pad.l+fullW,rY(50));ctx.stroke();
+    ctx.setLineDash([]);
 
     ctx.strokeStyle=T.rsi;ctx.lineWidth=2;ctx.beginPath();let rs=false;
     for(let i=0;i<visRsi.length;i++){if(visRsi[i]==null)continue;const x=bX(i),y=rY(visRsi[i]);if(!rs){ctx.moveTo(x,y);rs=true;}else ctx.lineTo(x,y);}ctx.stroke();
