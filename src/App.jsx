@@ -46,7 +46,7 @@ export default function App(){
   const[idx,setIdx]=useState(0);
   const[play,setPlay]=useState(false);
   const[spd,setSpd]=useState(80);
-  const[vis,setVis]=useState(60);
+  const[vis,setVis]=useState(30);
   const[yZoom,setYZoom]=useState(1.0);
   const[showBB,setShowBB]=useState(true);
   const[showSAR,setShowSAR]=useState(false);
@@ -425,7 +425,7 @@ export default function App(){
         <label style={{fontSize:11,color:T.forming,cursor:"pointer"}}><span style={{background:"rgba(68,138,255,0.1)",padding:"3px 10px",borderRadius:4,border:`1px solid ${T.forming}33`}}>1分足 CSV</span><input type="file" accept=".csv,.txt" onChange={onFile} style={{display:"none"}}/></label>
       </div>
       <div style={{display:"flex",alignItems:"center",gap:4,padding:"4px 12px",borderBottom:`1px solid ${T.border}`,flexWrap:"wrap",fontSize:11}}>
-        <Btn c={T.text} onClick={()=>setIdx(i=>Math.max(i-1,0))}>←1</Btn>
+        <Btn c={T.text} onClick={()=>setIdx(i=>Math.max(i-15,0))}>←15</Btn>
         <Btn c={T.text} onClick={()=>setIdx(i=>Math.min(i+1,maxIdx))}>→1</Btn>
         <Btn c={T.text} onClick={()=>{if(!d1m)return;const cur=Math.floor(d1m[idx].time/900000);let n=idx+1;while(n<d1m.length&&Math.floor(d1m[n].time/900000)===cur)n++;setIdx(Math.min(n,d1m.length-1));}}>→15m</Btn>
         <Btn c={T.text} onClick={()=>{setIdx(0);setPlay(false);}}>⏮</Btn>
