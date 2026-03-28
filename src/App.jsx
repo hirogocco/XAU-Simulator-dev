@@ -178,7 +178,7 @@ export default function App(){
       const h=findHandle(mx,my);
       if(h){e.preventDefault();setDragSt(h);touchStartRef.current=null;return;}
       // Start long press timer
-      touchStartRef.current={x:t.clientX,y:t.clientY,mx,my,moved:false};
+      touchStartRef.current={x:t.clientX,y:t.clientY,mx,my,moved:false,startPan:{...panOff}};
       longPressRef.current=setTimeout(()=>{
         if(touchStartRef.current&&!touchStartRef.current.moved){
           placeAction(touchStartRef.current.mx,touchStartRef.current.my);
@@ -205,9 +205,14 @@ export default function App(){
     }
     if(e.touches.length===1&&touchStartRef.current){
       const t=e.touches[0];
-      if(Math.hypot(t.clientX-touchStartRef.current.x,t.clientY-touchStartRef.current.y)>10){
+      const dx=t.clientX-touchStartRef.current.x,dy=t.clientY-touchStartRef.current.y;
+      if(Math.hypot(dx,dy)>10){
         touchStartRef.current.moved=true;
         if(longPressRef.current){clearTimeout(longPressRef.current);longPressRef.current=null;}
+        // 1-finger pan
+        e.preventDefault();
+        const sp=touchStartRef.current.startPan;
+        setPanOff({x:sp.x-dx/(dp.current.bW||10),y:sp.y+dy});
       }
     }
     if(e.touches.length===2&&pinchRef.current){
@@ -216,10 +221,6 @@ export default function App(){
       const dist=Math.hypot(t1.clientX-t2.clientX,t1.clientY-t2.clientY);
       const scale=dist/pinchRef.current.dist;
       setYZoom(Math.max(0.5,Math.min(5,pinchRef.current.startZoom*scale)));
-      // 2-finger pan
-      const cx=(t1.clientX+t2.clientX)/2,cy=(t1.clientY+t2.clientY)/2;
-      const dx=cx-pinchRef.current.cx,dy=cy-pinchRef.current.cy;
-      setPanOff({x:pinchRef.current.startPan.x-dx/(dp.current.bW||10),y:pinchRef.current.startPan.y+dy});
     }
   },[dragSt,applyDrag]);
 
