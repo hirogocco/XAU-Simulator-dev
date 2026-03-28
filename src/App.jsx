@@ -40,6 +40,30 @@ async function decompressB64(b64){const bin=atob(b64);const bytes=new Uint8Array
 function aggFn(data,upTo,ms=900000){const done=[];let f=null;for(let i=0;i<=upTo&&i<data.length;i++){const b=data[i],bk=Math.floor(b.time/ms)*ms;if(!f||f.bk!==bk){if(f)done.push({...f});f={bk,time:b.time,o:b.o,h:b.h,l:b.l,c:b.c,ind:{...b.ind}};}else{f.h=Math.max(f.h,b.h);f.l=Math.min(f.l,b.l);f.c=b.c;f.ind={...b.ind};}}return{done,forming:f};}
 function buildTrendMap(data,upTo,ms){const{done,forming}=aggFn(data,upTo,ms);const all=forming?[...done,forming]:[...done];const cl=all.map(b=>b.c);const e=calcEma(cl,13),s21=calcSma(cl,21),s75=calcSma(cl,75);const m=new Map();for(let i=0;i<all.length;i++)m.set(all[i].bk,trendClass(e[i],s21[i],s75[i]));return m;}
 
+const SPD_LEVELS=[500,350,250,180,120,80,50,30,15,5];
+function spdToLevel(ms){let best=0;let bd=Infinity;SPD_LEVELS.forEach((v,i)=>{const d=Math.abs(v-ms);if(d<bd){bd=d;best=i;}});return best+1;}
+function levelToSpd(lv){return SPD_LEVELS[Math.max(0,Math.min(9,lv-1))];}
+
+function Spinner({value,setValue,min,max,step=1,fmt,color}){
+  const ref=useRef(null);
+  const dragRef=useRef(null);
+  const vals=[];for(let v=min;v<=max+step*0.01;v=Math.round((v+step)*1000)/1000)vals.push(Math.round(v*1000)/1000);
+  const idx=vals.findIndex(v=>Math.abs(v-value)<step*0.01);
+  const prev=vals[idx-1]??null;const next=vals[idx+1]??null;
+  const onTS=e=>{e.stopPropagation();dragRef.current={y:e.touches[0].clientY,idx};};
+  const onTM=e=>{e.stopPropagation();if(!dragRef.current)return;const dy=dragRef.current.y-e.touches[0].clientY;const steps=Math.round(dy/18);const ni=Math.max(0,Math.min(vals.length-1,dragRef.current.idx+steps));setValue(vals[ni]);};
+  const onTE=e=>{e.stopPropagation();dragRef.current=null;};
+  const sz=11;
+  return(
+    <div ref={ref} style={{display:"flex",flexDirection:"column",alignItems:"center",userSelect:"none",touchAction:"none",minWidth:36}}
+      onTouchStart={onTS} onTouchMove={onTM} onTouchEnd={onTE}>
+      <div style={{fontSize:sz,color:color||"#5d6878",opacity:0.4,height:14,lineHeight:"14px"}}>{prev!=null?fmt(prev):""}</div>
+      <div style={{fontSize:sz+1,color:color||"#c8d2e0",fontWeight:700,height:16,lineHeight:"16px",borderTop:"1px solid rgba(255,255,255,0.1)",borderBottom:"1px solid rgba(255,255,255,0.1)",padding:"0 4px"}}>{fmt(value)}</div>
+      <div style={{fontSize:sz,color:color||"#5d6878",opacity:0.4,height:14,lineHeight:"14px"}}>{next!=null?fmt(next):""}</div>
+    </div>
+  );
+}
+
 export default function App(){
   const[d1m,setD1m]=useState(null);
   const[loading,setLoading]=useState(true);
@@ -48,6 +72,8 @@ export default function App(){
   const[spd,setSpd]=useState(80);
   const[vis,setVis]=useState(30);
   const[yZoom,setYZoom]=useState(1.0);
+  const[boostMult,setBoostMult]=useState(4);
+  const[boosting,setBoosting]=useState(false);
   const[showBB,setShowBB]=useState(true);
   const[showSAR,setShowSAR]=useState(false);
   const[showAutoTL,setShowAutoTL]=useState(true);
@@ -72,7 +98,7 @@ export default function App(){
 
   useEffect(()=>{(async()=>{try{const json=await decompressB64(PRESET_B64);const arr=JSON.parse(json);const bars=parsePreset(arr);if(bars.length){setD1m(bars);setIdx(Math.min(90,bars.length-1));}}catch(e){console.error("Preset fail",e);}setLoading(false);})();},[]);
   useEffect(()=>{const ro=new ResizeObserver(e=>{const w=Math.floor(e[0].contentRect.width);const vh=window.innerHeight;const h=Math.floor(Math.min(vh*0.72,Math.max(300,w*0.75)));setDim({w,h});});if(boxRef.current)ro.observe(boxRef.current);return()=>ro.disconnect();},[]);
-  useEffect(()=>{if(tmr.current)clearInterval(tmr.current);if(play&&d1m){tmr.current=setInterval(()=>{setIdx(p=>{if(p>=d1m.length-1){setPlay(false);return p;}return p+1;});},spd);}return()=>{if(tmr.current)clearInterval(tmr.current);};},[play,spd,d1m]);
+  useEffect(()=>{if(tmr.current)clearInterval(tmr.current);if(play&&d1m){const interval=boosting?Math.max(5,Math.round(spd/boostMult)):spd;tmr.current=setInterval(()=>{setIdx(p=>{if(p>=d1m.length-1){setPlay(false);return p;}return p+1;});},interval);}return()=>{if(tmr.current)clearInterval(tmr.current);};},[play,spd,d1m,boosting,boostMult]);
 
   const onFile=useCallback(e=>{const f=e.target.files[0];if(!f)return;const r=new FileReader();r.onload=ev=>{const p=parseCSV(ev.target.result);if(p.length){setD1m(p);setIdx(Math.min(90,p.length-1));setPlay(false);setMLines([]);setVLines([]);setPendingPt(null);setPanOff({x:0,y:0});}};r.readAsText(f);},[]);
 
@@ -434,10 +460,25 @@ export default function App(){
         <Btn c={T.text} onClick={()=>setIdx(i=>Math.min(i+1,maxIdx))}>→1</Btn>
         <Btn c={T.text} onClick={()=>{if(!d1m)return;const cur=Math.floor(d1m[idx].time/900000);let n=idx+1;while(n<d1m.length&&Math.floor(d1m[n].time/900000)===cur)n++;setIdx(Math.min(n,d1m.length-1));}}>→15m</Btn>
         <Btn c={T.text} onClick={()=>{setIdx(0);setPlay(false);}}>⏮</Btn>
-        <Sep/><Lb>速度</Lb><input type="range" min={5} max={500} value={spd} onChange={e=>setSpd(+e.target.value)} style={{width:60,accentColor:T.forming}}/><Lb>{spd}ms</Lb>
-        <Sep/><Lb>表示</Lb><input type="range" min={20} max={120} value={vis} onChange={e=>setVis(+e.target.value)} style={{width:50,accentColor:T.forming}}/><Lb>{vis}</Lb>
-        <Sep/><Lb>Y軸</Lb><input type="range" min={50} max={500} value={yZoom*100} onChange={e=>setYZoom(+e.target.value/100)} style={{width:55,accentColor:T.forming}}/><Lb>{yZoom.toFixed(1)}x</Lb>
-        <Btn c={T.text} onClick={()=>{setYZoom(1.0);setPanOff({x:0,y:0});}}>reset</Btn>
+        {IS_TOUCH?(
+          <>
+            <Sep/>
+            <Lb>速度</Lb><Spinner value={spdToLevel(spd)} setValue={lv=>setSpd(levelToSpd(lv))} min={1} max={10} step={1} fmt={v=>`速${v}`} color={T.forming}/>
+            <Sep/>
+            <Lb>表示</Lb><Spinner value={vis} setValue={setVis} min={20} max={60} step={5} fmt={v=>`${v}本`} color={T.forming}/>
+            <Sep/>
+            <Lb>Y軸</Lb><Spinner value={yZoom} setValue={setYZoom} min={0.5} max={5.0} step={0.5} fmt={v=>`${v.toFixed(1)}x`} color={T.forming}/>
+            <Btn c={T.text} onClick={()=>{setYZoom(1.0);setPanOff({x:0,y:0});}}>reset</Btn>
+          </>
+        ):(
+          <>
+            <Sep/><Lb>速度</Lb><input type="range" min={5} max={500} value={spd} onChange={e=>setSpd(+e.target.value)} style={{width:60,accentColor:T.forming}}/><Lb>{spd}ms</Lb>
+            <Sep/><Lb>表示</Lb><input type="range" min={20} max={60} value={vis} onChange={e=>setVis(+e.target.value)} style={{width:50,accentColor:T.forming}}/><Lb>{vis}</Lb>
+            <Sep/><Lb>Y軸</Lb><input type="range" min={50} max={500} value={yZoom*100} onChange={e=>setYZoom(+e.target.value/100)} style={{width:55,accentColor:T.forming}}/><Lb>{yZoom.toFixed(1)}x</Lb>
+            <Sep/><Lb style={{color:"#fdd835"}}>倍速</Lb><input type="range" min={2} max={16} value={boostMult} onChange={e=>setBoostMult(+e.target.value)} style={{width:50,accentColor:"#fdd835"}}/><Lb style={{color:"#fdd835"}}>×{boostMult}</Lb>
+            <Btn c={T.text} onClick={()=>{setYZoom(1.0);setPanOff({x:0,y:0});}}>reset</Btn>
+          </>
+        )}
       </div>
       <div style={{display:"flex",alignItems:"center",gap:4,padding:"4px 12px",borderBottom:`1px solid ${T.border}`,flexWrap:"wrap",fontSize:10}}>
         <Lb>位置</Lb><input type="range" min={0} max={maxIdx} value={idx} onChange={e=>{setIdx(+e.target.value);setPlay(false);}} style={{flex:"1 1 100px",minWidth:60,accentColor:T.forming}}/>
@@ -451,14 +492,32 @@ export default function App(){
           onAuxClick={e=>{if(e.button===1)e.preventDefault();}}
           onTouchStart={onTouchStart} onTouchMove={onTouchMove} onTouchEnd={onTouchEnd}
           style={{width:dim.w,height:dim.h,display:"block",touchAction:"none",cursor:dragSt?"grabbing":panSt?"move":"default"}}/>
+        {/* Play button - top half of RSI panel */}
         <div
           onTouchStart={e=>{e.stopPropagation();}}
           onTouchEnd={e=>{e.preventDefault();e.stopPropagation();setPlay(p=>!p);}}
           onClick={()=>setPlay(p=>!p)}
-          style={{position:"absolute",left:0,top:rsiPos.top,width:56,height:rsiPos.height,display:"flex",alignItems:"center",justifyContent:"center",cursor:"pointer",zIndex:5}}>
-          <div style={{width:36,height:36,borderRadius:8,background:play?"rgba(239,51,64,0.15)":"rgba(0,200,83,0.15)",border:`1.5px solid ${play?T.red:T.green}`,display:"flex",alignItems:"center",justifyContent:"center",fontSize:16,color:play?T.red:T.green}}>
+          style={{position:"absolute",left:0,top:rsiPos.top,width:56,height:rsiPos.height*0.45,display:"flex",alignItems:"center",justifyContent:"center",cursor:"pointer",zIndex:5}}>
+          <div style={{width:34,height:34,borderRadius:8,background:play?"rgba(239,51,64,0.15)":"rgba(0,200,83,0.15)",border:`1.5px solid ${play?T.red:T.green}`,display:"flex",alignItems:"center",justifyContent:"center",fontSize:16,color:play?T.red:T.green}}>
             {play?"⏸":"▶"}
           </div>
+        </div>
+        {/* Boost button - bottom half of RSI panel */}
+        <div style={{position:"absolute",left:0,top:rsiPos.top+rsiPos.height*0.45,width:56,height:rsiPos.height*0.55,display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",gap:2,zIndex:5}}>
+          <div
+            onTouchStart={e=>{e.stopPropagation();e.preventDefault();setBoosting(true);}}
+            onTouchEnd={e=>{e.stopPropagation();e.preventDefault();setBoosting(false);}}
+            onMouseDown={()=>setBoosting(true)}
+            onMouseUp={()=>setBoosting(false)}
+            onMouseLeave={()=>setBoosting(false)}
+            style={{width:34,height:26,borderRadius:6,background:boosting?"rgba(253,216,53,0.25)":"rgba(253,216,53,0.08)",border:`1.5px solid ${boosting?"#fdd835":"rgba(253,216,53,0.4)"}`,display:"flex",alignItems:"center",justifyContent:"center",fontSize:11,color:"#fdd835",cursor:"pointer",fontWeight:700}}>
+            ⚡
+          </div>
+          {IS_TOUCH?(
+            <Spinner value={boostMult} setValue={v=>setBoostMult(Math.round(v))} min={2} max={16} step={1} fmt={v=>`×${v}`} color="#fdd835"/>
+          ):(
+            <span style={{fontSize:9,color:"#fdd835"}}>×{boostMult}</span>
+          )}
         </div>
         {magPos&&(
           <canvas ref={magRef} style={{position:"absolute",top:8,left:8,width:110,height:110,borderRadius:"50%",pointerEvents:"none",boxShadow:"0 2px 12px rgba(0,0,0,0.7)"}}/>
