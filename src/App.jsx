@@ -65,10 +65,10 @@ export default function App(){
   const longPressRef=useRef(null);
   const touchStartRef=useRef(null);
   const pinchRef=useRef(null);
-  const[dim,setDim]=useState({w:920,h:720});
+  const[dim,setDim]=useState(()=>{const w=Math.min(typeof window!=="undefined"?window.innerWidth:375,920);return{w,h:Math.floor(Math.min(760,Math.max(400,w*0.75)))};});
 
   useEffect(()=>{(async()=>{try{const json=await decompressB64(PRESET_B64);const arr=JSON.parse(json);const bars=parsePreset(arr);if(bars.length){setD1m(bars);setIdx(Math.min(90,bars.length-1));}}catch(e){console.error("Preset fail",e);}setLoading(false);})();},[]);
-  useEffect(()=>{const ro=new ResizeObserver(e=>{const w=Math.floor(e[0].contentRect.width);setDim({w,h:Math.floor(Math.min(760,Math.max(500,w*0.65)))});});if(boxRef.current)ro.observe(boxRef.current);return()=>ro.disconnect();},[]);
+  useEffect(()=>{const ro=new ResizeObserver(e=>{const w=Math.floor(e[0].contentRect.width);const vh=window.innerHeight;const h=Math.floor(Math.min(vh*0.72,Math.max(300,w*0.75)));setDim({w,h});});if(boxRef.current)ro.observe(boxRef.current);return()=>ro.disconnect();},[]);
   useEffect(()=>{if(tmr.current)clearInterval(tmr.current);if(play&&d1m){tmr.current=setInterval(()=>{setIdx(p=>{if(p>=d1m.length-1){setPlay(false);return p;}return p+1;});},spd);}return()=>{if(tmr.current)clearInterval(tmr.current);};},[play,spd,d1m]);
 
   const onFile=useCallback(e=>{const f=e.target.files[0];if(!f)return;const r=new FileReader();r.onload=ev=>{const p=parseCSV(ev.target.result);if(p.length){setD1m(p);setIdx(Math.min(90,p.length-1));setPlay(false);setMLines([]);setVLines([]);setPendingPt(null);setPanOff({x:0,y:0});}};r.readAsText(f);},[]);
@@ -382,7 +382,7 @@ export default function App(){
     :["右クリック(RSI)=TL","右クリック(チャート)=垂直ライン","左クリック=削除","中ボタン=パン","ホイール=Y軸ズーム"];
 
   return(
-    <div style={{background:T.bg,minHeight:"100vh",fontFamily:"'JetBrains Mono','Fira Code',monospace",color:T.bright,position:"relative",touchAction:"none"}}>
+    <div style={{background:T.bg,minHeight:"100vh",maxWidth:"100vw",overflowX:"hidden",fontFamily:"'JetBrains Mono','Fira Code',monospace",color:T.bright,position:"relative",touchAction:"none"}}>
       <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",padding:"6px 12px",borderBottom:`1px solid ${T.border}`,flexWrap:"wrap",gap:4}}>
         <div style={{display:"flex",alignItems:"center",gap:6}}><span style={{fontSize:13,fontWeight:700,color:T.rsi}}>⟐</span><span style={{fontSize:12,fontWeight:700,letterSpacing:1}}>INTRA-BAR REPLAY</span></div>
         <label style={{fontSize:11,color:T.forming,cursor:"pointer"}}><span style={{background:"rgba(68,138,255,0.1)",padding:"3px 10px",borderRadius:4,border:`1px solid ${T.forming}33`}}>1分足 CSV</span><input type="file" accept=".csv,.txt" onChange={onFile} style={{display:"none"}}/></label>
