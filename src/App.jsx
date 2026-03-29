@@ -35,6 +35,167 @@ function parseCSV(text){
   return bars;
 }
 function parsePreset(arr){return arr.map(r=>({time:r[0]*1000,o:r[1],h:r[2],l:r[3],c:r[4],ind:{envM5U:r[5],envM5L:r[6],envM15U:r[7],envM15L:r[8],envM30U:r[9],envM30L:r[10],envH1U:r[11],envH1L:r[12],sma200H1:r[13],bbU3:r[14],bbU2:r[15],bbL2:r[16],bbL3:r[17],sar:r[18]}}));}
+
+// ═══════════ MT4 CSV SUPPORT ═══════════
+function parseMT4CSV(text) {
+  const lines = text.trim().split("\n");
+  const bars = [];
+  for (let i = 0; i < lines.length; i++) {
+    const parts = lines[i].replace(/\r/g, "").split(",");
+    if (parts.length < 6) continue;
+    const dateStr = parts[0].trim(), timeStr = parts[1].trim();
+    if (!/^\d{4}\./.test(dateStr)) continue;
+    const [y, m, d] = dateStr.split(".").map(Number);
+    const [hh, mm] = timeStr.split(":").map(Number);
+    const time = Date.UTC(y, m - 1, d, hh, mm, 0);
+    const o = +parts[2], h = +parts[3], l = +parts[4], c = +parts[5];
+    if (isNaN(time) || isNaN(o)) continue;
+    bars.push({ time, o, h, l, c, ind: {} });
+  }
+  return bars;
+}
+
+function detectCSVFormat(text) {
+  const firstLine = text.trim().split("\n")[0];
+  if (firstLine.toLowerCase().includes("time") && firstLine.toLowerCase().includes("open")) return "tv";
+  if (/^\d{4}\./.test(firstLine.trim())) return "mt4";
+  return "unknown";
+}
+
+// Aggregate 1m bars into higher TF bars
+function aggTF(bars, ms) {
+  const out = [];
+  let cur = null;
+  for (const b of bars) {
+    const bk = Math.floor(b.time / ms) * ms;
+    if (!cur || cur.bk !== bk) {
+      if (cur) out.push(cur);
+      cur = { bk, o: b.o, h: b.h, l: b.l, c: b.c };
+    } else {
+      cur.h = Math.max(cur.h, b.h);
+      cur.l = Math.min(cur.l, b.l);
+      cur.c = b.c;
+    }
+  }
+  if (cur) out.push(cur);
+  return out;
+}
+
+// SMA with running sum (O(n))
+function smaArr(vals, p) {
+  const out = [];
+  let sum = 0;
+  for (let i = 0; i < vals.length; i++) {
+    sum += vals[i];
+    if (i >= p) sum -= vals[i - p];
+    out.push(i >= p - 1 ? sum / p : null);
+  }
+  return out;
+}
+
+// EMA
+function emaArr(vals, p) {
+  const out = [];
+  const k = 2 / (p + 1);
+  let e = null;
+  for (let i = 0; i < vals.length; i++) {
+    if (i < p - 1) { out.push(null); continue; }
+    if (e === null) { let s = 0; for (let j = i - p + 1; j <= i; j++) s += vals[j]; e = s / p; }
+    else e = vals[i] * k + e * (1 - k);
+    out.push(e);
+  }
+  return out;
+}
+
+// Bollinger Bands (period=20, 2σ/3σ)
+function bbArr(closes, p = 20) {
+  const ma = smaArr(closes, p);
+  const u2 = [], l2 = [], u3 = [], l3 = [];
+  for (let i = 0; i < closes.length; i++) {
+    if (ma[i] === null) { u2.push(null); l2.push(null); u3.push(null); l3.push(null); continue; }
+    let vr = 0;
+    for (let j = i - p + 1; j <= i; j++) vr += (closes[j] - ma[i]) ** 2;
+    const sd = Math.sqrt(vr / p);
+    u2.push(ma[i] + 2 * sd); l2.push(ma[i] - 2 * sd);
+    u3.push(ma[i] + 3 * sd); l3.push(ma[i] - 3 * sd);
+  }
+  return { u2, l2, u3, l3 };
+}
+
+// Compute all indicators from 1m OHLC data (MT4 path)
+function computeIndicators(bars) {
+  console.time("computeIndicators");
+
+  // XAU envelope deviations (from MT4 source)
+  const ENV_DEV = { M5: 0.45, M15: 0.70, M30: 1.30, H1: 1.80 };
+  const TF_MS = { M5: 300000, M15: 900000, M30: 1800000, H1: 3600000, H4: 14400000, D1: 86400000 };
+  const ENV_TFS = ["M5", "M15", "M30", "H1"];
+  const SMA200_TFS = ["H1"];
+
+  // 1. Aggregate into each TF
+  const tfData = {};
+  for (const [name, ms] of Object.entries(TF_MS)) {
+    const tfBars = aggTF(bars, ms);
+    const closes = tfBars.map(b => b.c);
+    const buckets = tfBars.map(b => b.bk);
+    const data = { bars: tfBars, closes, buckets };
+
+    // Envelope center: SMA(21)
+    if (ENV_TFS.includes(name)) data.sma21 = smaArr(closes, 21);
+    // SMA200
+    if (SMA200_TFS.includes(name)) data.sma200 = smaArr(closes, 200);
+
+    tfData[name] = data;
+  }
+
+  // 2. BB on M15
+  const m15bb = bbArr(tfData.M15.closes, 20);
+
+  // 3. Build bucket→index maps
+  const tfMaps = {};
+  for (const [name, data] of Object.entries(tfData)) {
+    const map = new Map();
+    data.bars.forEach((b, i) => map.set(b.bk, i));
+    tfMaps[name] = map;
+  }
+
+  // 4. Assign indicator values to each 1m bar
+  for (let bi = 0; bi < bars.length; bi++) {
+    const bar = bars[bi];
+    const ind = {};
+
+    // Envelopes
+    for (const tf of ENV_TFS) {
+      const bk = Math.floor(bar.time / TF_MS[tf]) * TF_MS[tf];
+      const idx = tfMaps[tf].get(bk);
+      const sma = idx != null ? tfData[tf].sma21[idx] : null;
+      const dev = ENV_DEV[tf];
+      ind[`env${tf}U`] = sma != null ? sma * (1 + dev / 100) : null;
+      ind[`env${tf}L`] = sma != null ? sma * (1 - dev / 100) : null;
+    }
+
+    // SMA200 H1
+    const h1bk = Math.floor(bar.time / TF_MS.H1) * TF_MS.H1;
+    const h1idx = tfMaps.H1.get(h1bk);
+    ind.sma200H1 = h1idx != null && tfData.H1.sma200 ? tfData.H1.sma200[h1idx] : null;
+
+    // BB from M15
+    const m15bk = Math.floor(bar.time / TF_MS.M15) * TF_MS.M15;
+    const m15idx = tfMaps.M15.get(m15bk);
+    ind.bbU2 = m15idx != null ? m15bb.u2[m15idx] : null;
+    ind.bbL2 = m15idx != null ? m15bb.l2[m15idx] : null;
+    ind.bbU3 = m15idx != null ? m15bb.u3[m15idx] : null;
+    ind.bbL3 = m15idx != null ? m15bb.l3[m15idx] : null;
+
+    // SAR: not computed (complex, default OFF)
+    ind.sar = null;
+
+    bar.ind = ind;
+  }
+
+  console.timeEnd("computeIndicators");
+  return bars;
+}
 async function decompressB64(b64){const bin=atob(b64);const bytes=new Uint8Array(bin.length);for(let i=0;i<bin.length;i++)bytes[i]=bin.charCodeAt(i);const ds=new DecompressionStream("gzip");const w=ds.writable.getWriter();w.write(bytes);w.close();const rd=ds.readable.getReader();const chunks=[];while(true){const{done,value}=await rd.read();if(done)break;chunks.push(value);}const total=new Uint8Array(chunks.reduce((a,c)=>a+c.length,0));let off=0;for(const ch of chunks){total.set(ch,off);off+=ch.length;}return new TextDecoder().decode(total);}
 
 function aggFn(data,upTo,ms=900000){const done=[];let f=null;for(let i=0;i<=upTo&&i<data.length;i++){const b=data[i],bk=Math.floor(b.time/ms)*ms;if(!f||f.bk!==bk){if(f)done.push({...f});f={bk,time:b.time,o:b.o,h:b.h,l:b.l,c:b.c,ind:{...b.ind}};}else{f.h=Math.max(f.h,b.h);f.l=Math.min(f.l,b.l);f.c=b.c;f.ind={...b.ind};}}return{done,forming:f};}
@@ -100,7 +261,27 @@ export default function App(){
   useEffect(()=>{const ro=new ResizeObserver(e=>{const w=Math.floor(e[0].contentRect.width);const vh=window.innerHeight;const h=Math.floor(Math.min(vh*0.72,Math.max(300,w*0.75)));setDim({w,h});});if(boxRef.current)ro.observe(boxRef.current);return()=>ro.disconnect();},[]);
   useEffect(()=>{if(tmr.current)clearInterval(tmr.current);if(play&&d1m){const interval=boosting?Math.max(5,Math.round(spd/boostMult)):spd;tmr.current=setInterval(()=>{setIdx(p=>{if(p>=d1m.length-1){setPlay(false);return p;}return p+1;});},interval);}return()=>{if(tmr.current)clearInterval(tmr.current);};},[play,spd,d1m,boosting,boostMult]);
 
-  const onFile=useCallback(e=>{const f=e.target.files[0];if(!f)return;const r=new FileReader();r.onload=ev=>{const p=parseCSV(ev.target.result);if(p.length){setD1m(p);setIdx(Math.min(90,p.length-1));setPlay(false);setMLines([]);setVLines([]);setPendingPt(null);setPanOff({x:0,y:0});}};r.readAsText(f);},[]);
+  const onFile=useCallback(e=>{const f=e.target.files[0];if(!f)return;const r=new FileReader();r.onload=ev=>{
+    const text=ev.target.result;
+    const fmt=detectCSVFormat(text);
+    let p;
+    if(fmt==="mt4"){
+      p=parseMT4CSV(text);
+      if(p.length){
+        setLoading(true);
+        // Use setTimeout to let loading UI render before heavy computation
+        setTimeout(()=>{
+          computeIndicators(p);
+          setD1m(p);setIdx(Math.min(90,p.length-1));setPlay(false);setMLines([]);setVLines([]);setPendingPt(null);setPanOff({x:0,y:0});
+          setLoading(false);
+        },50);
+        return;
+      }
+    }else{
+      p=parseCSV(text);
+    }
+    if(p&&p.length){setD1m(p);setIdx(Math.min(90,p.length-1));setPlay(false);setMLines([]);setVLines([]);setPendingPt(null);setPanOff({x:0,y:0});}
+  };r.readAsText(f);},[]);
 
   const px2bar=px=>(px-dp.current.padL)/dp.current.bW+dp.current.st;
   const px2rsi=py=>Math.max(0,Math.min(100,((dp.current.rT+dp.current.rH-py)/dp.current.rH)*100));
@@ -443,7 +624,7 @@ export default function App(){
   useEffect(()=>{const h=e=>{if(e.code==="Space"){e.preventDefault();setPlay(p=>!p);}if(e.code==="ArrowRight"){e.preventDefault();setIdx(i=>Math.min(i+1,(d1m?.length||1)-1));}if(e.code==="ArrowLeft"){e.preventDefault();setIdx(i=>Math.max(i-1,0));}if(e.code==="ArrowUp"){e.preventDefault();setSpd(s=>Math.max(5,s-10));}if(e.code==="ArrowDown"){e.preventDefault();setSpd(s=>Math.min(500,s+10));}if(e.code==="Escape"){setPendingPt(null);setCtxMenu(null);}};window.addEventListener("keydown",h);return()=>window.removeEventListener("keydown",h);},[d1m]);
 
   const maxIdx=d1m?d1m.length-1:0;
-  if(loading)return <div style={{color:T.text,padding:40,fontFamily:"monospace",background:T.bg,minHeight:"100vh"}}>プリセットデータ読込中...</div>;
+  if(loading)return <div style={{color:T.text,padding:40,fontFamily:"monospace",background:T.bg,minHeight:"100vh"}}>データ読込中・インジケーター計算中...</div>;
 
   const hints=IS_TOUCH
     ?["長押し(RSI)=TL描画","長押し(チャート)=垂直ライン","タップ=削除","2本指=パン/ピンチ"]
